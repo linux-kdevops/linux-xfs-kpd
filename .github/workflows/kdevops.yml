@@ -13,6 +13,7 @@ jobs:
   run-kdevops:
     name: Run kdevops CI on Self-hosted Runner
     runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 21600  # 1 month
     steps:
       - name: Configure git
         run: |
@@ -100,7 +101,7 @@ jobs:
           cd kdevops
           WATCHDOG_CI_BEGIN="workflows/fstests/.begin"
           SLEEP_COUNT=0
-          while [[ ! -f $WATCHDOG_CI_BEGIN ]]; then
+          while [[ ! -f $WATCHDOG_CI_BEGIN ]]; do
             echo "CI test watchdog needs to wait until the test is ready ..."
             let SLEEP_COUNT=$SLEEP_COUNT+2
             sleep 2
@@ -114,7 +115,7 @@ jobs:
         run: |
           cd kdevops
           CI_WATCHDOG="./scripts/workflows/fstests/fstests_watchdog.py hosts baseline"
-          while [[ -f $WATCHDOG_CI_BEGIN ]]; then
+          while [[ -f $WATCHDOG_CI_BEGIN ]]; do
             $CI_WATCHDOG
             sleep 5
           fi
