@@ -101,6 +101,7 @@ jobs:
             $CI_WATCHDOG
             sleep 5
           done
+        continue-on-error: true
 
       - name: Get the defined CI test results directories for this repository
         id: results-dirs
