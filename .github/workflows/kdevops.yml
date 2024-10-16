@@ -95,27 +95,10 @@ jobs:
         run: |
           cd kdevops
           make ci-test &
-
-      - name: Wait up to 5 minutes for CI watchod test ready notification
-        run: |
-          cd kdevops
-          WATCHDOG_CI_BEGIN="workflows/fstests/.begin"
-          SLEEP_COUNT=0
-          while [[ ! -f $WATCHDOG_CI_BEGIN ]]; do
-            echo "CI test watchdog needs to wait until the test is ready ..."
-            let SLEEP_COUNT=$SLEEP_COUNT+2
-            sleep 2
-            if [[ $SLEEP_COUNT -gt 300 ]]; then
-              echo "Test is taking too long to ramp up"
-              exit 1
-            fi
-          done
-
-      - name: Run CI watchdog
-        run: |
-          cd kdevops
+          nohup stdbuf -oL bash -c 'make ci-test' > workflows/fstests/results/ci.log 2>&1 &
+          echo $! > ci.pid
           CI_WATCHDOG="./scripts/workflows/fstests/fstests_watchdog.py hosts baseline"
-          while [[ -f $WATCHDOG_CI_BEGIN ]]; do
+          while kill -0 $(cat ci.pid) 2> /dev/null; do
             $CI_WATCHDOG
             sleep 5
           done
