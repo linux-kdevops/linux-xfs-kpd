@@ -94,8 +94,7 @@ jobs:
       - name: Run CI tests
         run: |
           cd kdevops
-          make ci-test &
-          nohup stdbuf -oL bash -c 'make ci-test' > workflows/fstests/results/ci.log 2>&1 &
+          nohup stdbuf -oL bash -c 'make ci-test' > ci.log 2>&1 &
           echo $! > ci.pid
           CI_WATCHDOG="./scripts/workflows/fstests/fstests_watchdog.py hosts baseline"
           while kill -0 $(cat ci.pid) 2> /dev/null; do
@@ -115,6 +114,7 @@ jobs:
           name: ci-results
           path: |
             $(cat kdevops/results_dirs.txt | tr '\n' ',')
+            kdevops/ci.log
 
       # Ensure make destroy always runs, even on failure
       - name: Run kdevops make destroy
