@@ -118,6 +118,7 @@ jobs:
           done
           sed -i 's|^|kdevops/|' results.txt
           cat results.txt
+          # XXX: Use kdevops-results-archive to push a tarball as well
 
       - name: Read results.txt and set environment variable
         run: |
