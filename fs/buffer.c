@@ -2350,6 +2350,48 @@ bool block_is_partially_uptodate(struct folio *folio, size_t from, size_t count)
 }
 EXPORT_SYMBOL(block_is_partially_uptodate);
 
+static void bh_read_batch_async(struct folio *folio,
+				int nr, struct buffer_head *arr[],
+				bool fully_mapped, bool no_reads,
+				bool any_get_block_error)
+{
+	int i;
+	struct buffer_head *bh;
+
+	if (fully_mapped)
+		folio_set_mappedtodisk(folio);
+
+	if (no_reads) {
+		/*
+		 * All buffers are uptodate or get_block() returned an
+		 * error when trying to map them *all* buffers we can
+		 * finish the read.
+		 */
+		folio_end_read(folio, !any_get_block_error);
+		return;
+	}
+
+	/* Stage one: lock the buffers */
+	for (i = 0; i < nr; i++) {
+		bh = arr[i];
+		lock_buffer(bh);
+		mark_buffer_async_read(bh);
+	}
+
+	/*
+	 * Stage 2: start the IO.  Check for uptodateness
+	 * inside the buffer lock in case another process reading
+	 * the underlying blockdev brought it uptodate (the sct fix).
+	 */
+	for (i = 0; i < nr; i++) {
+		bh = arr[i];
+		if (buffer_uptodate(bh))
+			end_buffer_async_read(bh, 1);
+		else
+			submit_bh(REQ_OP_READ, bh);
+	}
+}
+
 /*
  * Generic "read_folio" function for block devices that have the normal
  * get_block functionality. This is most of the block device filesystems.
@@ -2414,37 +2456,8 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 		arr[nr++] = bh;
 	} while (i++, iblock++, (bh = bh->b_this_page) != head);
 
-	if (fully_mapped)
-		folio_set_mappedtodisk(folio);
+	bh_read_batch_async(folio, nr, arr, fully_mapped, nr == 0, page_error);
 
-	if (!nr) {
-		/*
-		 * All buffers are uptodate or get_block() returned an
-		 * error when trying to map them - we can finish the read.
-		 */
-		folio_end_read(folio, !page_error);
-		return 0;
-	}
-
-	/* Stage two: lock the buffers */
-	for (i = 0; i < nr; i++) {
-		bh = arr[i];
-		lock_buffer(bh);
-		mark_buffer_async_read(bh);
-	}
-
-	/*
-	 * Stage 3: start the IO.  Check for uptodateness
-	 * inside the buffer lock in case another process reading
-	 * the underlying blockdev brought it uptodate (the sct fix).
-	 */
-	for (i = 0; i < nr; i++) {
-		bh = arr[i];
-		if (buffer_uptodate(bh))
-			end_buffer_async_read(bh, 1);
-		else
-			submit_bh(REQ_OP_READ, bh);
-	}
 	return 0;
 }
 EXPORT_SYMBOL(block_read_full_folio);
