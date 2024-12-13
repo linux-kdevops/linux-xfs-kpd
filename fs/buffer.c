@@ -2392,6 +2392,17 @@ static void bh_read_batch_async(struct folio *folio,
 	}
 }
 
+#define bh_is_last(__bh, __head) ((__bh)->b_this_page == (__head))
+
+#define bh_next(__bh, __head) \
+    (bh_is_last(__bh, __head) ? NULL : (__bh)->b_this_page)
+
+/* Starts from the provided head */
+#define for_each_bh(__tmp, __head)			\
+    for ((__tmp) = (__head);				\
+         (__tmp);					\
+         (__tmp) = bh_next(__tmp, __head))
+
 /*
  * Generic "read_folio" function for block devices that have the normal
  * get_block functionality. This is most of the block device filesystems.
@@ -2421,11 +2432,10 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 
 	iblock = div_u64(folio_pos(folio), blocksize);
 	lblock = div_u64(limit + blocksize - 1, blocksize);
-	bh = head;
 	nr = 0;
 	i = 0;
 
-	do {
+	for_each_bh(bh, head) {
 		if (buffer_uptodate(bh))
 			continue;
 
@@ -2454,7 +2464,9 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 				continue;
 		}
 		arr[nr++] = bh;
-	} while (i++, iblock++, (bh = bh->b_this_page) != head);
+		i++;
+		iblock++;
+	}
 
 	bh_read_batch_async(folio, nr, arr, fully_mapped, nr == 0, page_error);
 
