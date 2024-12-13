@@ -2397,57 +2397,64 @@ static void bh_read_batch_async(struct folio *folio,
 #define bh_next(__bh, __head) \
     (bh_is_last(__bh, __head) ? NULL : (__bh)->b_this_page)
 
+/* Starts from a pivot which you initialize */
+#define for_each_bh_pivot(__pivot, __last, __head)	\
+    for ((__pivot) = __last = (__pivot);		\
+         (__pivot);					\
+         (__pivot) = bh_next(__pivot, __head),		\
+	 (__last) = (__pivot) ? (__pivot) : (__last))
+
 /* Starts from the provided head */
 #define for_each_bh(__tmp, __head)			\
     for ((__tmp) = (__head);				\
          (__tmp);					\
          (__tmp) = bh_next(__tmp, __head))
 
+struct bh_iter {
+	sector_t iblock;
+	get_block_t *get_block;
+	bool any_get_block_error;
+	int unmapped;
+	int bh_folio_reads;
+};
+
 /*
- * Generic "read_folio" function for block devices that have the normal
- * get_block functionality. This is most of the block device filesystems.
- * Reads the folio asynchronously --- the unlock_buffer() and
- * set/clear_buffer_uptodate() functions propagate buffer state into the
- * folio once IO has completed.
+ * Reads up to MAX_BUF_PER_PAGE buffer heads at a time on a folio on the given
+ * block range iblock to lblock and helps update the number of buffer-heads
+ * which were not uptodate or unmapped for which we issued an async read for
+ * on iter->bh_folio_reads for the full folio. Returns the last buffer-head we
+ * worked on.
  */
-int block_read_full_folio(struct folio *folio, get_block_t *get_block)
+static struct buffer_head *bh_read_iter(struct folio *folio,
+					struct buffer_head *pivot,
+					struct buffer_head *head,
+					struct inode *inode,
+					struct bh_iter *iter, sector_t lblock)
 {
-	struct inode *inode = folio->mapping->host;
-	sector_t iblock, lblock;
-	struct buffer_head *bh, *head, *arr[MAX_BUF_PER_PAGE];
-	size_t blocksize;
-	int nr, i;
-	int fully_mapped = 1;
-	bool page_error = false;
-	loff_t limit = i_size_read(inode);
+	struct buffer_head *arr[MAX_BUF_PER_PAGE];
+	struct buffer_head *bh = pivot, *last;
+	int nr = 0, i = 0;
+	size_t blocksize = head->b_size;
+	bool no_reads = false;
+	bool fully_mapped = false;
 
-	/* This is needed for ext4. */
-	if (IS_ENABLED(CONFIG_FS_VERITY) && IS_VERITY(inode))
-		limit = inode->i_sb->s_maxbytes;
+	/* collect buffers not uptodate and not mapped yet */
+	for_each_bh_pivot(bh, last, head) {
+		BUG_ON(nr >= MAX_BUF_PER_PAGE);
 
-	VM_BUG_ON_FOLIO(folio_test_large(folio), folio);
-
-	head = folio_create_buffers(folio, inode, 0);
-	blocksize = head->b_size;
-
-	iblock = div_u64(folio_pos(folio), blocksize);
-	lblock = div_u64(limit + blocksize - 1, blocksize);
-	nr = 0;
-	i = 0;
-
-	for_each_bh(bh, head) {
 		if (buffer_uptodate(bh))
 			continue;
 
 		if (!buffer_mapped(bh)) {
 			int err = 0;
 
-			fully_mapped = 0;
-			if (iblock < lblock) {
+			iter->unmapped++;
+			if (iter->iblock < lblock) {
 				WARN_ON(bh->b_size != blocksize);
-				err = get_block(inode, iblock, bh, 0);
+				err = iter->get_block(inode, iter->iblock,
+						      bh, 0);
 				if (err)
-					page_error = true;
+					iter->any_get_block_error = true;
 			}
 			if (!buffer_mapped(bh)) {
 				folio_zero_range(folio, i * blocksize,
@@ -2465,10 +2472,61 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 		}
 		arr[nr++] = bh;
 		i++;
-		iblock++;
+		iter->iblock++;
 	}
 
-	bh_read_batch_async(folio, nr, arr, fully_mapped, nr == 0, page_error);
+	iter->bh_folio_reads += nr;
+
+	WARN_ON_ONCE(!bh_is_last(last, head));
+
+	if (bh_is_last(last, head)) {
+		if (!iter->bh_folio_reads)
+			no_reads = true;
+		if (!iter->unmapped)
+			fully_mapped = true;
+	}
+
+	bh_read_batch_async(folio, nr, arr, fully_mapped, no_reads,
+			    iter->any_get_block_error);
+
+	return last;
+}
+
+/*
+ * Generic "read_folio" function for block devices that have the normal
+ * get_block functionality. This is most of the block device filesystems.
+ * Reads the folio asynchronously --- the unlock_buffer() and
+ * set/clear_buffer_uptodate() functions propagate buffer state into the
+ * folio once IO has completed.
+ */
+int block_read_full_folio(struct folio *folio, get_block_t *get_block)
+{
+	struct inode *inode = folio->mapping->host;
+	sector_t lblock;
+	size_t blocksize;
+	struct buffer_head *bh, *head;
+	struct bh_iter iter = {
+		.get_block = get_block,
+		.unmapped = 0,
+		.any_get_block_error = false,
+		.bh_folio_reads = 0,
+	};
+	loff_t limit = i_size_read(inode);
+
+	/* This is needed for ext4. */
+	if (IS_ENABLED(CONFIG_FS_VERITY) && IS_VERITY(inode))
+		limit = inode->i_sb->s_maxbytes;
+
+	VM_BUG_ON_FOLIO(folio_test_large(folio), folio);
+
+	head = folio_create_buffers(folio, inode, 0);
+	blocksize = head->b_size;
+
+	iter.iblock = div_u64(folio_pos(folio), blocksize);
+	lblock = div_u64(limit + blocksize - 1, blocksize);
+
+	for_each_bh(bh, head)
+		bh = bh_read_iter(folio, bh, head, inode, &iter, lblock);
 
 	return 0;
 }
