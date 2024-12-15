@@ -2447,8 +2447,11 @@ static struct buffer_head *bh_read_iter(struct folio *folio,
 		if (nr >= MAX_BUF_CHUNK)
 			break;
 
-		if (buffer_uptodate(bh))
+		if (buffer_uptodate(bh)) {
+			i++;
+			iter->iblock++;
 			continue;
+		}
 
 		if (!buffer_mapped(bh)) {
 			int err = 0;
@@ -2466,15 +2469,20 @@ static struct buffer_head *bh_read_iter(struct folio *folio,
 						(i + chunk_idx) * blocksize,
 						blocksize);
 				if (!err)
-					set_buffer_uptodate(bh);
+					 set_buffer_uptodate(bh);
+				i++;
+				iter->iblock++;
 				continue;
 			}
 			/*
 			 * get_block() might have updated the buffer
 			 * synchronously
 			 */
-			if (buffer_uptodate(bh))
+			if (buffer_uptodate(bh)) {
+				i++;
+				iter->iblock++;
 				continue;
+			}
 		}
 		arr[nr++] = bh;
 		i++;
