@@ -2410,7 +2410,7 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 	sector_t iblock, lblock;
 	struct buffer_head *bh, *head, *arr[MAX_BUF_PER_PAGE];
 	size_t blocksize;
-	int nr, i;
+	int nr;
 	int fully_mapped = 1;
 	bool page_error = false;
 	loff_t limit = i_size_read(inode);
@@ -2428,7 +2428,6 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 	lblock = div_u64(limit + blocksize - 1, blocksize);
 	bh = head;
 	nr = 0;
-	i = 0;
 
 	/* Stage one - collect buffer heads we need issue a read for */
 	do {
@@ -2446,7 +2445,7 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 					page_error = true;
 			}
 			if (!buffer_mapped(bh)) {
-				folio_zero_range(folio, i * blocksize,
+				folio_zero_range(folio, bh_offset(bh),
 						blocksize);
 				if (!err)
 					set_buffer_uptodate(bh);
@@ -2460,7 +2459,7 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 				continue;
 		}
 		arr[nr++] = bh;
-	} while (i++, iblock++, (bh = bh->b_this_page) != head);
+	} while (iblock++, (bh = bh->b_this_page) != head);
 
 	bh_read_batch_async(folio, nr, arr, fully_mapped, nr == 0, page_error);
 
